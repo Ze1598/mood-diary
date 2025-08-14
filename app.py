@@ -311,30 +311,51 @@ else:
             st.subheader("📈 Mood Trends Over Time")
             
             if len(df) > 0:
-                # Emotional states over time
-                fig_emotional = px.line(
-                    df, 
-                    x='date', 
-                    y=emotional_vars,
-                    title="Emotional States Over Time",
-                    labels={'value': 'Mood Level', 'date': 'Date'}
-                )
-                fig_emotional.update_layout(height=400)
-                fig_emotional.update_xaxes(tickformat='%Y-%m-%d')
-                st.plotly_chart(fig_emotional, use_container_width=True)
+                # Combined chart with bars for creative ideas and lines for emotional states
+                from plotly.graph_objects import Figure, Scatter, Bar
+                from plotly.subplots import make_subplots
                 
-                # Creative output over time
-                if df[creative_vars].sum().sum() > 0:
-                    fig_creative = px.bar(
-                        df, 
-                        x='date', 
-                        y=creative_vars,
-                        title="Creative Ideas Over Time",
-                        labels={'value': 'Number of Ideas', 'date': 'Date'}
+                fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
+                
+                # Add bars for creative ideas (left y-axis)
+                for var in creative_vars:
+                    if df[var].sum() > 0:  # Only add if there's data
+                        fig_combined.add_trace(
+                            Bar(x=df['date'], y=df[var], name=var.replace('_', ' ').title(), 
+                                yaxis='y', opacity=0.7),
+                            secondary_y=False,
+                        )
+                
+                # Add lines for emotional states (right y-axis)
+                for var in emotional_vars:
+                    fig_combined.add_trace(
+                        Scatter(x=df['date'], y=df[var], mode='lines+markers', 
+                               name=var.replace('_', ' ').title()),
+                        secondary_y=True,
                     )
-                    fig_creative.update_layout(height=400)
-                    fig_creative.update_xaxes(tickformat='%Y-%m-%d')
-                    st.plotly_chart(fig_creative, use_container_width=True)
+                
+                # Update layout
+                fig_combined.update_xaxes(tickformat='%Y-%m-%d')
+                fig_combined.update_yaxes(
+                    title_text="Number of Ideas", 
+                    secondary_y=False,
+                    dtick=1,
+                    tickmode='linear'
+                )
+                fig_combined.update_yaxes(
+                    title_text="Mood Level", 
+                    secondary_y=True,
+                    range=[0, 5],
+                    dtick=1,
+                    tickmode='linear'
+                )
+                fig_combined.update_layout(
+                    title="Mood Trends and Creative Ideas Over Time",
+                    height=500,
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig_combined, use_container_width=True)
             
                 # Correlation Analysis
                 st.subheader("🔗 Mood Correlations")
@@ -343,11 +364,17 @@ else:
                 mood_cols = emotional_vars + energy_vars + mental_vars + creative_vars
                 corr_matrix = df[mood_cols].corr()
                 
+                # Show only lower triangle (bottom diagonal) to avoid redundancy
+                import numpy as np
+                corr_matrix_display = corr_matrix.copy()
+                mask = np.triu(np.ones_like(corr_matrix_display, dtype=bool))
+                corr_matrix_display = corr_matrix_display.mask(mask)
+                
                 # Create correlation heatmap
                 fig_corr = px.imshow(
-                    corr_matrix,
+                    corr_matrix_display,
                     title="Mood Variable Correlations",
-                    color_continuous_scale="RdBu",
+                    color_continuous_scale=[[0, 'purple'], [0.5, 'white'], [1, 'orange']],
                     aspect="auto"
                 )
                 fig_corr.update_layout(height=600)
