@@ -19,10 +19,20 @@ def get_supabase_client():
 def save_mood_entry(mood_data):
     try:
         supabase = get_supabase_client()
-        mood_data['created_at'] = datetime.now().isoformat()
+        today = datetime.now().date().isoformat()
         
-        result = supabase.schema('moodlogs').table('mood_entries').insert(mood_data).execute()
-        return result.data[0]['id'] if result.data else None
+        # Check if an entry already exists for today
+        existing_entry = get_existing_entry_for_date(today)
+        
+        if existing_entry:
+            # Update existing entry
+            result = supabase.schema('moodlogs').table('mood_entries').update(mood_data).eq('id', existing_entry['id']).execute()
+            return existing_entry['id'] if result.data else None
+        else:
+            # Create new entry
+            mood_data['created_at'] = datetime.now().isoformat()
+            result = supabase.schema('moodlogs').table('mood_entries').insert(mood_data).execute()
+            return result.data[0]['id'] if result.data else None
     except Exception as e:
         st.error(f"Database error: {e}")
         return None
@@ -52,6 +62,16 @@ def delete_mood_entry(entry_id):
         return result.data
     except Exception as e:
         st.error(f"Error deleting entry: {e}")
+        return None
+
+def get_existing_entry_for_date(target_date):
+    try:
+        supabase = get_supabase_client()
+        # Get entries for the target date (comparing just the date part)
+        result = supabase.schema('moodlogs').table('mood_entries').select("*").gte('created_at', f"{target_date}T00:00:00").lt('created_at', f"{target_date}T23:59:59").execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        st.error(f"Error checking for existing entry: {e}")
         return None
 
 
@@ -101,7 +121,7 @@ else:
     st.write("Welcome! You are authenticated.")
     
     # User is verified, show full app
-    tab1, tab2 = st.tabs(["📝 Enter Mood", "📊 Historic Entries"])
+    tab1, tab2, tab3 = st.tabs(["📝 Enter Mood", "📊 Historic Entries", "📈 Dashboard"])
 
     with tab1:
         st.header("Enter Your Mood Variables")
@@ -140,9 +160,14 @@ else:
                 "essay_ideas": int(essay_ideas)
             }
             
+            today = datetime.now().date().isoformat()
+            existing_entry = get_existing_entry_for_date(today)
             entry_id = save_mood_entry(mood_data)
             if entry_id:
-                st.success(f"Entry saved successfully! ID: {entry_id}")
+                if existing_entry:
+                    st.success(f"Entry updated successfully! ID: {entry_id}")
+                else:
+                    st.success(f"Entry saved successfully! ID: {entry_id}")
             else:
                 st.error("Failed to save entry")
 
@@ -220,3 +245,113 @@ else:
                             st.error("Failed to update entries")
         else:
             st.info("No mood entries found. Add your first entry in the Enter Mood tab!")
+    
+    with tab3:
+        st.header("Mood Analytics Dashboard")
+        
+        # Time period selector
+        period_options = {
+            "Last 7 days": 7,
+            "Last 30 days": 30,
+            "Last 90 days": 90
+        }
+        
+        selected_period = st.selectbox(
+            "Select time period:",
+            options=list(period_options.keys()),
+            index=0  # Default to 7 days
+        )
+        
+        days_back = period_options[selected_period]
+        
+        mood_history = get_mood_history()
+        
+        if mood_history and len(mood_history) > 0:
+            # Convert to DataFrame for analysis
+            df = pd.DataFrame(mood_history)
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            df['date'] = df['created_at'].dt.date
+            
+            # Filter data based on selected period
+            cutoff_date = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days_back)
+            # Ensure created_at is timezone-aware
+            if df['created_at'].dt.tz is None:
+                df['created_at'] = df['created_at'].dt.tz_localize('UTC')
+            df = df[df['created_at'] >= cutoff_date]
+            
+            # Sort by date for proper time series
+            df = df.sort_values('created_at')
+            
+            # Define mood categories
+            emotional_vars = ['loneliness', 'fulfillment', 'excitement', 'anger', 'depression']
+            energy_vars = ['tiredness', 'energy_levels', 'sleepiness']
+            mental_vars = ['mania', 'creativity']
+            creative_vars = ['song_ideas', 'essay_ideas']
+            
+            # Summary Statistics - Individual Averages
+            st.subheader(f"📊 Average Mood Variables ({selected_period})")
+            
+            if len(df) > 0:
+                # Create columns for all 12 measurements
+                col1, col2, col3, col4 = st.columns(4)
+                
+                all_vars = emotional_vars + energy_vars + mental_vars + creative_vars
+                
+                for i, var in enumerate(all_vars):
+                    col = [col1, col2, col3, col4][i % 4]
+                    with col:
+                        avg_val = df[var].mean()
+                        # Format variable name for display
+                        display_name = var.replace('_', ' ').title()
+                        st.metric(display_name, f"{avg_val:.1f}")
+            else:
+                st.info(f"No entries found for {selected_period.lower()}")
+            
+            # Time Series Charts
+            st.subheader("📈 Mood Trends Over Time")
+            
+            if len(df) > 0:
+                # Emotional states over time
+                fig_emotional = px.line(
+                    df, 
+                    x='date', 
+                    y=emotional_vars,
+                    title="Emotional States Over Time",
+                    labels={'value': 'Mood Level', 'date': 'Date'}
+                )
+                fig_emotional.update_layout(height=400)
+                fig_emotional.update_xaxes(tickformat='%Y-%m-%d')
+                st.plotly_chart(fig_emotional, use_container_width=True)
+                
+                # Creative output over time
+                if df[creative_vars].sum().sum() > 0:
+                    fig_creative = px.bar(
+                        df, 
+                        x='date', 
+                        y=creative_vars,
+                        title="Creative Ideas Over Time",
+                        labels={'value': 'Number of Ideas', 'date': 'Date'}
+                    )
+                    fig_creative.update_layout(height=400)
+                    fig_creative.update_xaxes(tickformat='%Y-%m-%d')
+                    st.plotly_chart(fig_creative, use_container_width=True)
+            
+                # Correlation Analysis
+                st.subheader("🔗 Mood Correlations")
+                
+                # Calculate correlations for mood variables only (exclude timestamps and IDs)
+                mood_cols = emotional_vars + energy_vars + mental_vars + creative_vars
+                corr_matrix = df[mood_cols].corr()
+                
+                # Create correlation heatmap
+                fig_corr = px.imshow(
+                    corr_matrix,
+                    title="Mood Variable Correlations",
+                    color_continuous_scale="RdBu",
+                    aspect="auto"
+                )
+                fig_corr.update_layout(height=600)
+                st.plotly_chart(fig_corr, use_container_width=True)
+                
+        else:
+            st.info("No data available for dashboard. Add some mood entries first!")
